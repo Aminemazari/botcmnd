@@ -1,0 +1,17 @@
+{
+  "url": "https://lamaison-miral.com/pages/couvre-chaise-scandinave-1?fbclid=PAb21jcAVElyRleHRuA2FlbQEwAHBkb2YCYWRpZAGrNJeMu-REc3J0YwZhcHBfaWQPNTY3MDY3MzQzMzUyNDI3AAGneWLQQ94VUkK4Ay7N1aS_oQdGM8lrvLiA4ozxB6YLmIJpmD0C-W0-lGPfIXM_aem_qXpw-gNWZ1uCynIWGXq4EQ&utm_medium=paid&utm_source=ig&utm_id=120247635207920068&utm_content=120247635232780068&utm_term=120247635207910068&utm_campaign=120247635207920068",
+  "fullName": "Your Name",
+  "phoneNumber": "0600000000",
+  "wilaya": "random",
+  "commune": "first",
+  "address": "Your Address",
+  "deliveryType": "random",
+  "offerIndex": "random",
+  "dryRun": false,
+  "bulkMode": true,
+  "dataPath": "data.json",
+  "useProxies": false,
+  "proxySource": "proxies.txt",
+  "dailyRequestLimit": 200,
+  "scheduleHours": 24
+}
