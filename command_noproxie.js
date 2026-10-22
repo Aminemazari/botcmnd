@@ -501,6 +501,14 @@ async function placeOrder(browser, config, person, proxy) {
   }
 }
 
+function pickProxy(proxies, previousProxy = null) {
+  if (proxies.length === 0) return null;
+  const candidates = previousProxy && proxies.length > 1
+    ? proxies.filter((proxy) => proxy !== previousProxy)
+    : proxies;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 async function runBot() {
   const configPath = path.join(__dirname, 'config.json');
   if (!fs.existsSync(configPath)) {
@@ -528,22 +536,27 @@ async function runBot() {
   }
 
   const browser = await chromium.launch({ headless: false });
+  const maxAttempts = Math.max(Number(config.maxAttempts) || 3, 1);
 
   for (let i = 0; i < people.length; i++) {
     let success = false;
-    let attempts = 0;
-    const maxAttempts = 3;
+    let previousProxy = null;
 
-    while (!success && attempts < maxAttempts) {
-      attempts++;
-
-      const proxy = proxies.length > 0 ? proxies[Math.floor(Math.random() * proxies.length)] : null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const proxy = pickProxy(proxies, previousProxy);
+      previousProxy = proxy;
+      console.log(`Attempt ${attempt}/${maxAttempts} for ${people[i].fullName}.`);
       const result = await placeOrder(browser, config, people[i], proxy);
       if (result === true) {
         success = true;
-      } else if (attempts < maxAttempts) {
-        console.log(`Retrying ${people[i].fullName} (Attempt ${attempts + 1}/${maxAttempts})...`);
+        break;
+      } else if (attempt < maxAttempts) {
+        console.log('Attempt failed; switching proxy and retrying immediately.');
       }
+    }
+
+    if (!success) {
+      console.error(`Giving up on ${people[i].fullName} after ${maxAttempts} attempts.`);
     }
 
     if (i < people.length - 1) {

@@ -12,6 +12,7 @@
   "dataPath": "data.json",
   "useProxies": false,
   "proxySource": "proxies.txt",
+  "maxAttempts": 3,
   "dailyRequestLimit": 200,
   "scheduleHours": 24
 }

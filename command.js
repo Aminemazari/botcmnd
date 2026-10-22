@@ -19,6 +19,14 @@ function createDailySchedule(requestCount, durationMs) {
     return weights.map((weight) => Math.round((weight / totalWeight) * durationMs));
 }
 
+function pickProxy(proxies, previousProxy = null) {
+    if (proxies.length === 0) return null;
+    const candidates = previousProxy && proxies.length > 1
+        ? proxies.filter((proxy) => proxy !== previousProxy)
+        : proxies;
+    return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 async function humanPause(min = 150, max = 400) {
     await sleep(randomBetween(min, max));
 }
@@ -372,12 +380,29 @@ async function runBot() {
     const scheduleHours = Math.max(Number(config.scheduleHours) || 24, 1);
     const schedule = createDailySchedule(dailyRequestLimit, scheduleHours * 60 * 60 * 1000);
     console.log(`Scheduling ${dailyRequestLimit} localhost requests over ${scheduleHours} hours.`);
+    const maxAttempts = Math.max(Number(config.maxAttempts) || 3, 1);
 
     for (let requestIndex = 0; requestIndex < dailyRequestLimit; requestIndex++) {
         const person = people[requestIndex % people.length];
-        const proxy = proxies.length > 0 ? proxies[Math.floor(Math.random() * proxies.length)] : null;
         console.log(`\n--- Scheduled request ${requestIndex + 1}/${dailyRequestLimit} ---`);
-        await placeOrder(browser, config, person, proxy);
+        let success = false;
+        let previousProxy = null;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const proxy = pickProxy(proxies, previousProxy);
+            previousProxy = proxy;
+            console.log(`Attempt ${attempt}/${maxAttempts} for ${person.fullName}.`);
+            success = await placeOrder(browser, config, person, proxy);
+            if (success) break;
+
+            if (attempt < maxAttempts) {
+                console.log('Attempt failed; switching proxy and retrying immediately.');
+            }
+        }
+
+        if (!success) {
+            console.error(`Giving up on ${person.fullName} after ${maxAttempts} attempts.`);
+        }
 
         if (requestIndex < dailyRequestLimit - 1) {
             const delayMs = schedule[requestIndex];
