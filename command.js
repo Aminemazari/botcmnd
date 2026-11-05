@@ -183,6 +183,15 @@ function buildProxyOptions(proxyString) {
             password = passParts.join(':');
             serverPart = right;
         }
+    } else {
+        const parts = raw.split(':');
+        if (parts.length === 4) {
+            serverPart = `${parts[0]}:${parts[1]}`;
+            username = parts[2];
+            password = parts[3];
+        } else if (parts.length === 2) {
+            serverPart = raw;
+        }
     }
 
     if (!/^https?:\/\//i.test(serverPart)) {
@@ -379,7 +388,7 @@ async function runBot() {
     const dailyRequestLimit = Math.min(Math.max(Number(config.dailyRequestLimit) || 200, 1), 200);
     const scheduleHours = Math.max(Number(config.scheduleHours) || 24, 1);
     const schedule = createDailySchedule(dailyRequestLimit, scheduleHours * 60 * 60 * 1000);
-    console.log(`Scheduling ${dailyRequestLimit} localhost requests over ${scheduleHours} hours.`);
+ 
     const maxAttempts = Math.max(Number(config.maxAttempts) || 3, 1);
 
     for (let requestIndex = 0; requestIndex < dailyRequestLimit; requestIndex++) {
