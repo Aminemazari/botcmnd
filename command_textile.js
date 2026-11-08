@@ -222,17 +222,21 @@ async function placeOrder(browser, config, person, proxy) {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
         console.log('Waiting for order form to appear...');
-        await page.waitForSelector('form input[name="fullName"], form input[name="phone"]', { timeout: 30000 });
+        await page.waitForSelector(
+            'form input[name="fullName"], form input[name="phone"], label.offer input[type="radio"]',
+            { timeout: 30000 }
+        );
         await humanPause(300, 700);
 
         // 1. Select the first product offer.
-        const offers = page.locator('input[type="radio"][name="6ada054fd579e8b40214f56c"]');
+        const offers = page.locator(
+            'label.offer input[type="radio"], input[type="radio"][name]:not([name="deliveryPlace"])'
+        ).first();
+        await offers.waitFor({ state: 'attached', timeout: 15000 });
         const offersCount = await offers.count();
-        if (offersCount === 0) {
-            throw new Error('No product offers found.');
-        }
-        await offers.first().check({ force: true });
-        console.log(`Selected first product offer: ${await offers.first().getAttribute('id')}`);
+        if (offersCount === 0) throw new Error('No product offers found.');
+        await offers.check({ force: true });
+        console.log(`Selected first product offer: ${await offers.getAttribute('id')}`);
         await humanPause(200, 500);
 
         // 2. Select the first textile/color option.
