@@ -67,12 +67,14 @@ async function attemptClick(locator) {
 async function clickSubmit(page) {
     const exactSubmitSelector = 'button[type="button"].single-submit[data-pb-section="PBS-nslh041788049115059"][data-pb-value="اطلب الآن"]';
     const selectors = [
+        'button.btn-primary:has-text("أكّد طلبيتك")',
         exactSubmitSelector,
         'button.single-submit',
         'button#buy-btn',
         'button#sticky-buy-btn',
         'button:has-text("اطلب الآن")',
-        'button:has-text("اطلب الان")'
+        'button:has-text("اطلب الان")',
+        'button:has-text("أكّد طلبيتك")'
     ];
 
     const exactSubmit = page.locator(exactSubmitSelector).first();
@@ -88,7 +90,7 @@ async function clickSubmit(page) {
         }
     }
 
-    const roleLocator = page.getByRole('button', { name: /اطلب الان/i }).first();
+    const roleLocator = page.getByRole('button', { name: /(?:اطلب الان|أكّد طلبيتك)/i }).first();
     if (await roleLocator.count()) {
         if (await attemptClick(roleLocator)) return true;
     }
@@ -102,7 +104,7 @@ async function clickSubmit(page) {
         }
 
         if (typeof frame.getByRole === 'function') {
-            const frameRole = frame.getByRole('button', { name: /اطلب الان/i }).first();
+            const frameRole = frame.getByRole('button', { name: /(?:اطلب الان|أكّد طلبيتك)/i }).first();
             if (await frameRole.count()) {
                 if (await attemptClick(frameRole)) return true;
             }
@@ -221,7 +223,10 @@ async function placeOrder(browser, config, person, proxy) {
         await page.goto(config.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
         console.log('Waiting for order form to appear...');
-        await page.waitForSelector('input[name="extra_fields[custom_field_Id9Dv79YvrMaZAnT]"]', { timeout: 30000 });
+        await page.waitForSelector(
+            '[data-order-card="true"], input[name="extra_fields[custom_field_Id9Dv79YvrMaZAnT]"]',
+            { timeout: 30000 }
+        );
         await humanPause(300, 700);
 
         // 1. Select Product Offer
@@ -242,6 +247,31 @@ async function placeOrder(browser, config, person, proxy) {
             }
             console.log(`Selected offer: ${await selectedOption.getAttribute('value')}`);
             await humanPause(200, 500);
+        } else {
+            const offers = page.locator('button[type="button"][aria-pressed][aria-pressed="true"] img, button[type="button"][aria-pressed="false"] img').locator('..');
+            const offerCount = await offers.count();
+            if (offerCount === 0) {
+                throw new Error('No product options found.');
+            }
+            const offerIndex = Math.floor(Math.random() * offerCount);
+            const offer = offers.nth(offerIndex);
+            if (!await attemptClick(offer)) {
+                throw new Error(`Product option at index ${offerIndex} could not be selected.`);
+            }
+            console.log(`Selected random offer at index ${offerIndex}`);
+
+            const colors = page.locator('button[type="button"][aria-label][aria-pressed]');
+            const colorCount = await colors.count();
+            if (colorCount === 0) {
+                throw new Error('No color options found.');
+            }
+            const colorIndex = Math.floor(Math.random() * colorCount);
+            const color = colors.nth(colorIndex);
+            if (!await attemptClick(color)) {
+                throw new Error(`Color option at index ${colorIndex} could not be selected.`);
+            }
+            console.log(`Selected random color: ${await color.getAttribute('aria-label')}`);
+            await humanPause(200, 500);
         }
 
         // 2. Fill Personal Information
@@ -250,43 +280,66 @@ async function placeOrder(browser, config, person, proxy) {
         const extraFields = page.locator(extraFieldSelector);
         const extraFieldCount = await extraFields.count();
         if (extraFieldCount < 1) {
-            throw new Error('Full name input not found.');
-        }
-        await humanType(page, extraFields.nth(0), person.fullName);
-
-        // The supplied markup repeats the same name for the phone field. Prefer
-        // a telephone input or phone placeholder when the page exposes one.
-        const phoneSelector = 'input[type="tel"], input[name*="phone" i], input[placeholder*="الهاتف"], input[placeholder*="phone" i]';
-        const phoneFields = page.locator(phoneSelector);
-        if (await phoneFields.count()) {
-            await humanType(page, phoneFields.first(), person.phoneNumber);
-        } else if (extraFieldCount > 1) {
-            await humanType(page, extraFields.nth(1), person.phoneNumber);
+            const fullName = page.locator('input[aria-label="الاسم الكامل"], input[autocomplete="name"]').first();
+            const phone = page.locator('input[aria-label="رقم الهاتف"], input[type="tel"], input[autocomplete="tel"]').first();
+            if (!await fullName.count()) throw new Error('Full name input not found.');
+            if (!await phone.count()) throw new Error('Phone input not found.');
+            await humanType(page, fullName, person.fullName);
+            await humanType(page, phone, person.phoneNumber);
         } else {
-            throw new Error('Phone input not found. The supplied phone markup has the same name as the full-name field.');
+            await humanType(page, extraFields.nth(0), person.fullName);
+
+            // The supplied markup repeats the same name for the phone field. Prefer
+            // a telephone input or phone placeholder when the page exposes one.
+            const phoneSelector = 'input[type="tel"], input[name*="phone" i], input[placeholder*="الهاتف"], input[placeholder*="phone" i]';
+            const phoneFields = page.locator(phoneSelector);
+            if (await phoneFields.count()) {
+                await humanType(page, phoneFields.first(), person.phoneNumber);
+            } else if (extraFieldCount > 1) {
+                await humanType(page, extraFields.nth(1), person.phoneNumber);
+            } else {
+                throw new Error('Phone input not found. The supplied phone markup has the same name as the full-name field.');
+            }
         }
 
         // 3. Select Wilaya (State)
+        const wilayaSelector = (await page.locator('select[aria-label="الولاية"]').count())
+            ? 'select[aria-label="الولاية"]'
+            : 'select#countrySelect';
         let finalWilaya = config.wilaya;
         if (config.wilaya === "random") {
-            const wilayaOptions = await page.locator('select#countrySelect option:not([disabled])').all();
+            const wilayaOptions = await page.locator(
+                `${wilayaSelector} option:not([disabled])[value]:not([value=""])`
+            ).all();
+            if (wilayaOptions.length === 0) {
+                throw new Error('No Wilaya options found.');
+            }
             const randomWilayaIndex = Math.floor(Math.random() * wilayaOptions.length);
             finalWilaya = await wilayaOptions[randomWilayaIndex].getAttribute('value');
             const wilayaText = await wilayaOptions[randomWilayaIndex].innerText();
             console.log(`Picked random wilaya: ${wilayaText.trim()}`);
         }
-        await page.selectOption('select#countrySelect', finalWilaya);
+        if (!finalWilaya || finalWilaya === '') {
+            throw new Error('Wilaya selection is empty.');
+        }
+        await page.selectOption(wilayaSelector, finalWilaya);
         await humanPause(250, 600);
 
         // 4. Wait for Commune to load and select
         console.log('Waiting for commune dropdown...');
-        const communeSelector = 'select#citySelect';
+        const communeSelector = (await page.locator('select[aria-label="البلدية"]').count())
+            ? 'select[aria-label="البلدية"]'
+            : 'select#citySelect';
         await page.waitForFunction(sel => {
             const select = document.querySelector(sel);
-            return select && !select.disabled && select.options.length > 1;
+            return select
+                && !select.disabled
+                && Array.from(select.options).some(option => option.value);
         }, communeSelector, { timeout: 15000 });
         
-        const communeOptions = await page.locator(`${communeSelector} option:not([disabled])`).all();
+        const communeOptions = await page.locator(
+            `${communeSelector} option:not([disabled])[value]:not([value=""])`
+        ).all();
         const validCommuneOptions = [];
         for (const option of communeOptions) {
             const value = await option.getAttribute('value');
@@ -323,6 +376,17 @@ async function placeOrder(browser, config, person, proxy) {
                 }
             }
             await page.selectOption(deliverySelector, finalDeliveryType);
+        } else if (await page.locator('input[name="delivery"]').count()) {
+            const deliveryType = config.deliveryType === 'random' ? 'random' : 'home';
+            const deliveryOptions = page.locator('input[name="delivery"]');
+            let deliveryIndex = 0;
+            if (deliveryType === 'random') {
+                deliveryIndex = Math.floor(Math.random() * await deliveryOptions.count());
+            } else if (config.deliveryType === 'office' || config.deliveryType === 'المكتب') {
+                deliveryIndex = 1;
+            }
+            await deliveryOptions.nth(deliveryIndex).check({ force: true });
+            console.log(`Selected delivery option: ${deliveryIndex === 0 ? 'home' : 'office'}`);
         } else {
             console.log('No delivery-type select found; continuing to submit.');
         }
@@ -333,18 +397,20 @@ async function placeOrder(browser, config, person, proxy) {
             console.log('DRY RUN: Success! Form filled.');
         } else {
             console.log('SUBMITTING ORDER!');
-            const beforeUrl = page.url();
-            const redirectPromise = page.waitForURL(
-                (url) => url.toString() !== beforeUrl,
-                { timeout: 60000 }
-            );
             const clicked = await clickSubmit(page);
             if (!clicked) {
                 throw new Error('Submit button not found or not clickable.');
             }
-            console.log('Submit button clicked. Waiting for redirect...');
-            await redirectPromise;
-            console.log(`SUCCESS: Redirected to ${page.url()}`);
+            // This storefront submits in place and keeps the landing-page URL.
+            // A URL change (for example, a /thanks page) is not required.
+            console.log('Submit button clicked. Waiting for in-place submission...');
+            try {
+                await page.waitForLoadState('networkidle', { timeout: 15000 });
+            } catch (error) {
+                console.log(`In-place submission did not reach network idle: ${error.message}`);
+            }
+            await humanPause(1000, 1500);
+            console.log(`SUCCESS: Order submitted at ${page.url()} (URL unchanged is expected)`);
         }
         return true;
 

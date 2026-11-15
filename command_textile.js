@@ -31,11 +31,18 @@ async function humanPause(min = 150, max = 400) {
     await sleep(randomBetween(min, max));
 }
 
-async function humanType(page, target, value) {
+async function humanType(page, target, value, options = {}) {
     const locator = typeof target === 'string' ? page.locator(target) : target;
+    await locator.waitFor({ state: 'visible', timeout: 30000 });
     await locator.click({ timeout: 15000, force: true });
     await locator.fill('');
-    await locator.type(value, { delay: randomBetween(40, 120) });
+    const minDelay = options.minDelay || 40;
+    const maxDelay = options.maxDelay || 120;
+    await locator.type(value, { delay: randomBetween(minDelay, maxDelay) });
+    const enteredValue = await locator.inputValue();
+    if (enteredValue !== value) {
+        throw new Error(`Could not fill input ${typeof target === 'string' ? target : 'field'}.`);
+    }
     await humanPause(200, 500);
 }
 
@@ -65,11 +72,17 @@ async function attemptClick(locator) {
 }
 
 async function clickSubmit(page) {
-    const exactSubmitSelector = 'button[type="button"].btn-primary';
+    const exactSubmitSelector = 'button[type="button"]:has-text("أطلب الآن")';
     const selectors = [
         exactSubmitSelector,
+        'button.single-submit',
+        'button#buy-btn',
+        'button#sticky-buy-btn',
+        'button.btn-primary',
+        'button.order-button',
         'button:has-text("أطلب الآن")',
-        'button:has-text("اطلب الآن")'
+        'button:has-text("اطلب الآن")',
+        'button:has-text("اطلب الان")'
     ];
 
     const exactSubmit = page.locator(exactSubmitSelector).first();
@@ -85,7 +98,7 @@ async function clickSubmit(page) {
         }
     }
 
-    const roleLocator = page.getByRole('button', { name: /أ?طلب الآن/i }).first();
+    const roleLocator = page.getByRole('button', { name: /أ?طلب الآن|اطلب الان/i }).first();
     if (await roleLocator.count()) {
         if (await attemptClick(roleLocator)) return true;
     }
@@ -99,7 +112,7 @@ async function clickSubmit(page) {
         }
 
         if (typeof frame.getByRole === 'function') {
-            const frameRole = frame.getByRole('button', { name: /أ?طلب الآن/i }).first();
+            const frameRole = frame.getByRole('button', { name: /أ?طلب الآن|اطلب الان/i }).first();
             if (await frameRole.count()) {
                 if (await attemptClick(frameRole)) return true;
             }
@@ -107,6 +120,21 @@ async function clickSubmit(page) {
     }
 
     return false;
+}
+
+async function selectRandomComboboxOption(page, input) {
+    await input.click({ timeout: 15000, force: true });
+    const options = page.locator('[data-combobox-option="true"]:visible');
+    await options.first().waitFor({ state: 'visible', timeout: 15000 });
+    const count = await options.count();
+    if (count === 0) {
+        throw new Error('No visible options found in combobox.');
+    }
+    const index = Math.floor(Math.random() * count);
+    const option = options.nth(index);
+    const label = (await option.innerText()).trim();
+    await option.click({ timeout: 15000 });
+    return { label, index };
 }
 
 async function fetchProxies(url) {
@@ -209,110 +237,157 @@ async function placeOrder(browser, config, person, proxy) {
 
     const proxyOptions = proxy ? buildProxyOptions(proxy) : null;
     const contextOptions = proxyOptions ? { proxy: proxyOptions } : {};
-    const context = await browser.newContext(contextOptions);
-    const page = await context.newPage();
+    let context;
 
     try {
+        if (!browser.isConnected()) {
+            throw new Error('Playwright browser is disconnected before creating the page context.');
+        }
+        context = await browser.newContext(contextOptions);
+        const page = await context.newPage();
         const targetUrl = config.url2 || config.url;
         if (!targetUrl) {
             throw new Error('config.url2 is required for the textile form.');
         }
         console.log(`Navigating to ${targetUrl}...`);
         // Faster loading strategy for slow proxies
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        const response = await page.goto(targetUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 60000
+        });
+        const responseStatus = response ? response.status() : 'unknown';
+        const pageTitle = await page.title();
+        console.log(`Page response: ${responseStatus}; title: ${pageTitle || '(none)'}; url: ${page.url()}`);
+        if (response && responseStatus >= 400) {
+            throw new Error(
+                `The target page returned HTTP ${responseStatus}. It did not load the order form.`
+            );
+        }
         
         console.log('Waiting for order form to appear...');
         await page.waitForSelector(
-            'form input[name="fullName"], form input[name="phone"], label.offer input[type="radio"]',
+            'input[type="checkbox"].checkbox, label.offer input[type="radio"], input[name^="extra_fields"]',
             { timeout: 30000 }
         );
         await humanPause(300, 700);
 
-        // 1. Select the first product offer.
-        const offers = page.locator(
-            'label.offer input[type="radio"], input[type="radio"][name]:not([name="deliveryPlace"])'
-        ).first();
-        await offers.waitFor({ state: 'attached', timeout: 15000 });
-        const offersCount = await offers.count();
-        if (offersCount === 0) throw new Error('No product offers found.');
-        await offers.check({ force: true });
-        console.log(`Selected first product offer: ${await offers.getAttribute('id')}`);
+        // 1. Select one random color.
+        const colors = page.locator('input[type="checkbox"].checkbox');
+        const colorCount = await colors.count();
+        if (colorCount === 0) {
+            throw new Error('No color options found.');
+        }
+        const colorIndex = Math.floor(Math.random() * colorCount);
+        const color = colors.nth(colorIndex);
+        await color.check({ force: true });
+        console.log(`Selected color ${colorIndex + 1}/${colorCount}: ${await color.getAttribute('id')}`);
         await humanPause(200, 500);
 
-        // 2. Select the first textile/color option.
-        const options = page.locator(
-            'input[type="checkbox"].checkbox:not(.modal-toggle):not(#multi-product-offers-required-selections-modal)'
-        );
-        const optionsCount = await options.count();
-        if (optionsCount > 0) {
-            const selectedOption = options.first();
-            await selectedOption.check({ force: true });
-            console.log(`Selected first textile option: ${await selectedOption.getAttribute('id')}`);
-            await humanPause(200, 500);
-        } else {
-            throw new Error('No textile options found.');
+        // 2. Select one random product offer.
+        const offers = page.locator('label.offer input[type="radio"], input[type="radio"][name]:not([name="deliveryPlace"])');
+        const offerCount = await offers.count();
+        if (offerCount === 0) {
+            throw new Error('No product options found.');
         }
+        const offerIndex = Math.floor(Math.random() * offerCount);
+        const offer = offers.nth(offerIndex);
+        await offer.check({ force: true });
+        console.log(`Selected product option ${offerIndex + 1}/${offerCount}: ${await offer.inputValue()}`);
+        await humanPause(200, 500);
 
-        // 3. Fill Personal Information
+        // 3. Fill personal information.
         console.log('Filling personal information...');
-        await humanType(page, 'form input[name="fullName"]', person.fullName);
-        await humanType(page, 'form input[name="phone"]', person.phoneNumber);
+        const name = page.locator(
+            'input[name="extra_fields[custom_field_Id9Dv79YvrMaZAnT]"], input[name="fullName"]'
+        ).first();
+        const phone = page.locator(
+            'input[type="tel"], input[name="phone"], input[name*="phone" i], input[placeholder*="الهاتف"]'
+        ).first();
+        await humanType(page, name, person.fullName, { minDelay: 160, maxDelay: 320 });
+        await humanPause(500, 900);
+        await humanType(page, phone, person.phoneNumber, { minDelay: 160, maxDelay: 320 });
+        console.log('Personal information entered. Waiting before selecting location...');
+        await humanPause(1200, 2000);
 
-        // 4. Select Wilaya (State)
-        const wilayaSelector = 'form select[name="wilaya"]';
-        const wilayaOptions = page.locator(`${wilayaSelector} option:not([value=""])`);
+        // 4. Select Wilaya and the dependent Commune.
+        const wilayaSelector = (await page.locator('select[name="wilaya"]').count())
+            ? 'select[name="wilaya"]'
+            : (await page.locator('select#countrySelect').count()
+                ? 'select#countrySelect'
+                : 'select[aria-label="الولاية"]');
+        const communeSelector = (await page.locator('select[name="address"]').count())
+            ? 'select[name="address"]'
+            : (await page.locator('select#citySelect').count()
+                ? 'select#citySelect'
+                : 'select[aria-label="البلدية"]');
+        const wilaya = page.locator(wilayaSelector);
+        await wilaya.waitFor({ state: 'visible', timeout: 30000 });
+        await page.waitForFunction((selector) => {
+            const select = document.querySelector(selector);
+            return select && Array.from(select.options).some(option => option.value);
+        }, wilayaSelector, { timeout: 30000 });
+        const wilayaOptions = page.locator(`${wilayaSelector} option:not([disabled])[value]:not([value=""])`);
         const wilayaCount = await wilayaOptions.count();
-        if (wilayaCount === 0) throw new Error('No wilaya options found.');
+        if (wilayaCount === 0) {
+            throw new Error('No Wilaya options found.');
+        }
         const wilayaIndex = config.wilaya === 'random'
             ? Math.floor(Math.random() * wilayaCount)
             : 0;
         const wilayaValue = await wilayaOptions.nth(wilayaIndex).getAttribute('value');
         await page.selectOption(wilayaSelector, wilayaValue);
-        console.log(`Selected wilaya: ${await wilayaOptions.nth(wilayaIndex).innerText()}`);
+        console.log(`Selected wilaya: ${(await wilayaOptions.nth(wilayaIndex).innerText()).trim()}`);
         await humanPause(250, 600);
 
-        // 5. Wait for the dependent commune select and choose the first option.
-        console.log('Waiting for commune dropdown...');
-        const communeSelector = 'form select[name="address"]';
-        await page.waitForFunction(sel => {
-            const select = document.querySelector(sel);
-            return select && !select.disabled && select.options.length > 1;
-        }, communeSelector, { timeout: 15000 });
-        
-        const communeOptions = page.locator(`${communeSelector} option:not([value=""])`);
+        await page.waitForFunction(() => {
+            const select = document.querySelector(
+                'select[name="address"], select#citySelect, select[aria-label="البلدية"]'
+            );
+            return select && !select.disabled && Array.from(select.options).some(option => option.value);
+        }, { timeout: 15000 });
+        const communeOptions = page.locator(`${communeSelector} option:not([disabled])[value]:not([value=""])`);
         const communeCount = await communeOptions.count();
         if (communeCount === 0) {
-            throw new Error('No commune options loaded after selecting the wilaya.');
+            throw new Error('No Commune options loaded after selecting the Wilaya.');
         }
         const communeIndex = config.commune === 'random'
             ? Math.floor(Math.random() * communeCount)
             : 0;
         const communeValue = await communeOptions.nth(communeIndex).getAttribute('value');
         await page.selectOption(communeSelector, communeValue);
-        console.log(`Selected commune: ${await communeOptions.nth(communeIndex).innerText()}`);
+        console.log(`Selected commune: ${(await communeOptions.nth(communeIndex).innerText()).trim()}`);
         await humanPause(250, 600);
 
-        // The notes field is intentionally left untouched.
-        await page.locator('form input[name="deliveryPlace"][value="at_home"]').check();
-        await humanPause(200, 500);
+        // 5. Select delivery type when available.
+        const deliverySelector = 'select#delivery-type';
+        if (await page.locator(deliverySelector).count()) {
+            const deliveryOptions = page.locator(`${deliverySelector} option:not([disabled])[value]:not([value=""])`);
+            const deliveryCount = await deliveryOptions.count();
+            if (deliveryCount > 0) {
+                const deliveryIndex = config.deliveryType === 'random'
+                    ? Math.floor(Math.random() * deliveryCount)
+                    : 0;
+                await page.selectOption(deliverySelector, await deliveryOptions.nth(deliveryIndex).getAttribute('value'));
+            }
+        }
 
-        // 7. Complete Order
+        // 6. Complete Order.
         if (config.dryRun) {
             console.log('DRY RUN: Success! Form filled.');
         } else {
             console.log('SUBMITTING ORDER!');
-            const beforeUrl = page.url();
-            const redirectPromise = page.waitForURL(
-                (url) => url.toString() !== beforeUrl,
-                { timeout: 60000 }
-            );
             const clicked = await clickSubmit(page);
             if (!clicked) {
                 throw new Error('Submit button not found or not clickable.');
             }
-            console.log('Submit button clicked. Waiting for redirect...');
-            await redirectPromise;
-            console.log(`SUCCESS: Redirected to ${page.url()}`);
+            console.log('Submit button clicked. Waiting for in-place submission...');
+            try {
+                await page.waitForLoadState('networkidle', { timeout: 15000 });
+            } catch (error) {
+                console.log(`Submission did not reach network idle: ${error.message}`);
+            }
+            await humanPause(1000, 1500);
+            console.log(`SUCCESS: Order submitted at ${page.url()}`);
         }
         return true;
 
@@ -320,7 +395,13 @@ async function placeOrder(browser, config, person, proxy) {
         console.error(`FAILED: ${person.fullName} - ${error.message}`);
         return false;
     } finally {
-        await context.close();
+        if (context) {
+            try {
+                await context.close();
+            } catch (closeError) {
+                console.warn(`Could not close order context: ${closeError.message}`);
+            }
+        }
     }
 }
 
@@ -351,7 +432,7 @@ async function runBot() {
         console.log(`Loaded ${proxies.length} proxies.`);
     }
 
-    const browser = await chromium.launch({ headless: false });
+    let browser = await chromium.launch({ headless: false });
 
     const dailyRequestLimit = Math.min(Math.max(Number(config.dailyRequestLimit) || 200, 1), 200);
     const scheduleHours = Math.max(Number(config.scheduleHours) || 24, 1);
@@ -366,10 +447,19 @@ async function runBot() {
         let previousProxy = null;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (!browser.isConnected()) {
+                console.warn('Browser was closed; launching a replacement browser.');
+                browser = await chromium.launch({ headless: false });
+            }
             const proxy = pickProxy(proxies, previousProxy);
             previousProxy = proxy;
             console.log(`Attempt ${attempt}/${maxAttempts} for ${person.fullName}.`);
-            success = await placeOrder(browser, config, person, proxy);
+            try {
+                success = await placeOrder(browser, config, person, proxy);
+            } catch (error) {
+                success = false;
+                console.error(`Attempt failed unexpectedly: ${error.message}`);
+            }
             if (success) break;
 
             if (attempt < maxAttempts) {
